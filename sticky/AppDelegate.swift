@@ -3,6 +3,11 @@ import SwiftUI
 import Carbon.HIToolbox
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    /// Direct reference set in applicationDidFinishLaunching. SwiftUI views can
+    /// reach the delegate via this instead of `NSApp.delegate as? AppDelegate`,
+    /// which has been flaky from inside context-menu closures.
+    static weak var shared: AppDelegate?
+
     private var statusItem: NSStatusItem!
     private var noteWindows: [UUID: NoteWindow] = [:]
     private var historyWindow: NSWindow?
@@ -12,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppDelegate.shared = self
         // Menu-bar-only app — no Dock icon, no main window.
         NSApp.setActivationPolicy(.accessory)
 
@@ -60,26 +66,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Rebuild the menu so shortcut labels reflect the current settings.
     private func rebuildMenu() {
+        NSLog("StickyNotes: ⚙︎ rebuildMenu called")
         let menu = NSMenu()
         let s = SettingsStore.shared
 
-        menu.addItem(makeItem(
-            "New Note  \(s.newNoteHotkey.displayString)",
-            #selector(newNote)
-        ))
-        menu.addItem(makeItem(
-            "Show History  \(s.historyHotkey.displayString)",
-            #selector(showHistoryAction)
-        ))
+        addItem(to: menu, title: "New Note  \(s.newNoteHotkey.displayString)",
+                selector: #selector(newNote))
+        addItem(to: menu, title: "Show History  \(s.historyHotkey.displayString)",
+                selector: #selector(showHistoryAction))
         menu.addItem(.separator())
-        menu.addItem(makeItem(
-            "Add Chrome Tab to Active Group  \(s.addTabToGroupHotkey.displayString)",
-            #selector(toggleTabInActiveGroup)
-        ))
-        menu.addItem(makeItem("Manage Tab Groups…", #selector(showGroupsWindow)))
+        addItem(to: menu, title: "Add Chrome Tab to Active Group  \(s.addTabToGroupHotkey.displayString)",
+                selector: #selector(toggleTabInActiveGroup))
+        addItem(to: menu, title: "Manage Tab Groups…",
+                selector: #selector(showGroupsWindow))
         menu.addItem(.separator())
-        menu.addItem(makeItem("Settings…", #selector(showSettings), key: ","))
-        menu.addItem(makeItem("Test Chrome Pinning…", #selector(testChromePinning)))
+        addItem(to: menu, title: "Settings…",
+                selector: #selector(showSettings), key: ",")
+        addItem(to: menu, title: "Test Chrome Pinning…",
+                selector: #selector(testChromePinning))
+        menu.addItem(.separator())
+        // DEBUG: a test item that does nothing but NSLog. If THIS one fires but
+        // "Manage Tab Groups…" doesn't, the selector for showGroupsWindow is
+        // wired wrong. If neither fires, all menu actions are broken (very
+        // unlikely — would mean nothing else in this menu works either).
+        addItem(to: menu, title: "🐛 DEBUG: Test Menu Action",
+                selector: #selector(debugTestMenuAction))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(
             title: "Quit Sticky Notes",
@@ -87,12 +98,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             keyEquivalent: "q"
         ))
         statusItem.menu = menu
+        NSLog("StickyNotes: ⚙︎ rebuildMenu finished — \(menu.items.count) items in menu")
     }
 
+    /// Explicit step-by-step menu-item construction with per-item logging so we
+    /// can see whether the target/action wiring is succeeding. Replaces the
+    /// older `makeItem` helper.
+    private func addItem(to menu: NSMenu, title: String, selector: Selector, key: String = "") {
+        let item = NSMenuItem()
+        item.title = title
+        item.target = self
+        item.action = selector
+        item.keyEquivalent = key
+        let responds = self.responds(to: selector)
+        NSLog("StickyNotes:   + '\(title)' → \(selector) [target responds: \(responds)]")
+        menu.addItem(item)
+    }
+
+    /// Kept for backward compat with any caller still using `makeItem`. New
+    /// items go through `addItem(to:title:selector:)`.
     private func makeItem(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
         return item
+    }
+
+    @objc func debugTestMenuAction() {
+        NSLog("StickyNotes: ★★★ debugTestMenuAction FIRED — menu actions work ★★★")
+        let alert = NSAlert()
+        alert.messageText = "Debug menu action fired ✓"
+        alert.informativeText = "Menu item wiring is working. If Manage Tab Groups still doesn't fire, the selector for showGroupsWindow is the problem."
+        alert.runModal()
     }
 
     // MARK: - Hotkeys
@@ -203,30 +239,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func showGroupsWindow() {
-        NSLog("StickyNotes: showGroupsWindow invoked")
+        NSLog("StickyNotes: ▶︎ showGroupsWindow START")
+
         if let win = groupsWindow {
+            NSLog("StickyNotes:   reusing existing groupsWindow (visible=\(win.isVisible), frame=\(win.frame))")
+            win.setIsVisible(true)
             win.makeKeyAndOrderFront(nil)
             win.orderFrontRegardless()
             NSApp.activate(ignoringOtherApps: true)
+            NSLog("StickyNotes: ◀︎ showGroupsWindow END (reused), visible=\(win.isVisible)")
             return
         }
+
+        let initialFrame = NSRect(x: 0, y: 0, width: 560, height: 480)
         let hosting = NSHostingController(rootView: GroupsView())
-        let window = NSWindow(contentViewController: hosting)
+        hosting.preferredContentSize = initialFrame.size
+
+        // Create with an explicit contentRect — relying on NSHostingController
+        // alone has been flaky on some macOS 14.x builds (window opens at 0×0).
+        let window = NSWindow(
+            contentRect: initialFrame,
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
         window.title = "Tab Groups"
-        window.styleMask = [.titled, .closable, .resizable]
+        window.contentViewController = hosting
+        window.setContentSize(initialFrame.size)
+        window.contentMinSize = NSSize(width: 460, height: 320)
         window.isReleasedWhenClosed = false
         // Raise above sticky-note windows (which are at .floating). Without
-        // this, the Groups window opens behind any visible stickies and
-        // appears not to open at all.
+        // this, the Groups window opens behind any visible stickies.
         window.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         // Match Settings: dark appearance overrides the app-wide light scheme.
         window.appearance = NSAppearance(named: .darkAqua)
         window.center()
         window.delegate = self
         groupsWindow = window
+
+        NSLog("StickyNotes:   created window, frame=\(window.frame), level=\(window.level.rawValue)")
+
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
+
+        NSLog("StickyNotes: ◀︎ showGroupsWindow END, visible=\(window.isVisible), onScreen=\(window.isOnActiveSpace)")
     }
 
     // MARK: - Tab Group hotkey action

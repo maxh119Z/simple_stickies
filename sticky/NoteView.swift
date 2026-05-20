@@ -303,7 +303,19 @@ struct NoteView: View {
 
         Divider()
         Button("Manage groups…") {
-            (NSApp.delegate as? AppDelegate)?.showGroupsWindow()
+            NSLog("StickyNotes: ⊕ note context-menu 'Manage groups…' tapped")
+            // Prefer the static shared (set in applicationDidFinishLaunching).
+            // Fall back to NSApp.delegate cast in case the shared wasn't set
+            // for some reason.
+            if let d = AppDelegate.shared {
+                NSLog("StickyNotes:   using AppDelegate.shared")
+                d.showGroupsWindow()
+            } else if let d = NSApp.delegate as? AppDelegate {
+                NSLog("StickyNotes:   using NSApp.delegate fallback")
+                d.showGroupsWindow()
+            } else {
+                NSLog("StickyNotes:   ✗ no AppDelegate available (this should be impossible)")
+            }
         }
 
         if note.pinnedToApp != nil {
