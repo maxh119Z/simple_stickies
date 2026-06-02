@@ -119,6 +119,23 @@ final class PinManager {
     private var pollTimer: Timer?
     private var observerInstalled = false
 
+    // MARK: - Reveal-all (peek) mode
+
+    /// When true, every pinned note window is forced visible regardless of the
+    /// current tab/app. Dismissal (the user clicking X) is handled by the
+    /// persistent `Note.dismissed` flag — closeNote sets it before tearing down
+    /// the window, and AppDelegate's peek-reopen loop filters dismissed notes
+    /// out, so they don't resurrect on the next peek toggle.
+    private(set) var revealAll = false
+
+    /// Toggle peek mode. Returns the new state.
+    @discardableResult
+    func toggleRevealAll() -> Bool {
+        revealAll.toggle()
+        for id in pins.keys { updateVisibility(for: id) }
+        return revealAll
+    }
+
     // MARK: - Public API
 
     func pin(noteID: UUID, window: NSWindow, toAppBundleID bundleID: String,
@@ -260,6 +277,14 @@ final class PinManager {
 
     private func computeShouldShow(noteID: UUID) -> Bool {
         guard let pin = pins[noteID] else { return false }
+
+        // Peek mode: show every pinned note that still has an alive window.
+        // (Dismissed notes don't get here — closeNote tore the window down and
+        // the AppDelegate's peek-reopen loop skipped them based on the
+        // persistent `dismissed` flag, so they aren't in `pins`.)
+        if revealAll {
+            return true
+        }
 
         let realFrontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
 

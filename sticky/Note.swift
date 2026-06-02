@@ -17,6 +17,9 @@ struct Note: Identifiable, Codable, Equatable {
     var frameY: Double?
     var frameW: Double?
     var frameH: Double?
+    /// User explicitly closed (X) this note. Persists across launches and peek
+    /// toggles. Cleared when the user opens the note again via history.
+    var dismissed: Bool
 
     init(content: String = "", color: NoteColor = .yellow, kind: NoteKind = .text) {
         self.id = UUID()
@@ -31,6 +34,7 @@ struct Note: Identifiable, Codable, Equatable {
         self.pinMatchMode = nil
         self.pinnedGroupID = nil
         self.strokes = []
+        self.dismissed = false
     }
 
     // Backwards-compatible decoding: old notes don't have the new fields.
@@ -38,6 +42,7 @@ struct Note: Identifiable, Codable, Equatable {
         case id, content, contentRTFD, createdAt, updatedAt
         case color, kind, pinnedToApp, pinnedToURL, pinMatchMode, pinnedGroupID, strokes
         case frameX, frameY, frameW, frameH
+        case dismissed
     }
 
     init(from decoder: Decoder) throws {
@@ -58,6 +63,7 @@ struct Note: Identifiable, Codable, Equatable {
         frameY       = try c.decodeIfPresent(Double.self, forKey: .frameY)
         frameW       = try c.decodeIfPresent(Double.self, forKey: .frameW)
         frameH       = try c.decodeIfPresent(Double.self, forKey: .frameH)
+        dismissed    = try c.decodeIfPresent(Bool.self, forKey: .dismissed) ?? false
     }
 
     var preview: String {

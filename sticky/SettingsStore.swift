@@ -86,6 +86,14 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Global hotkey: peek/reveal all pinned notes, press again to restore.
+    @Published var revealAllHotkey: HotkeySetting {
+        didSet {
+            persist()
+            onHotkeyChange?()
+        }
+    }
+
     @Published var launchAtLogin: Bool {
         didSet { applyLaunchAtLogin() }
     }
@@ -96,35 +104,40 @@ final class SettingsStore: ObservableObject {
     private let defaults = UserDefaults.standard
 
     private init() {
-        // Defaults: ⌘N new note, ⌘⇧N history, ⌘S save, ⌃⌘N add tab to active group.
+        // Defaults: ⌘N new note, ⌘⇧N history, ⌘S save, ⌃⌘N add tab to active
+        // group, ⌃⌘M reveal/peek all pinned notes.
         let defaultNew     = HotkeySetting(keyCode: kVK_ANSI_N, modifiers: cmdKey)
         let defaultHistory = HotkeySetting(keyCode: kVK_ANSI_N, modifiers: cmdKey | shiftKey)
         let defaultSave    = HotkeySetting(keyCode: kVK_ANSI_S, modifiers: cmdKey)
         let defaultAddTab  = HotkeySetting(keyCode: kVK_ANSI_N, modifiers: cmdKey | controlKey)
+        let defaultReveal  = HotkeySetting(keyCode: kVK_ANSI_M, modifiers: cmdKey | controlKey)
 
         // One-time migration: anyone who saved Ctrl-based shortcuts under v1 gets
-        // their shortcuts force-rebound to the new Cmd-based defaults. v3 adds the
-        // tab-group hotkey default. After this the user's customizations (if any)
-        // are preserved across launches.
+        // their shortcuts force-rebound to the new Cmd-based defaults. v3 added the
+        // tab-group hotkey; v4 adds the reveal hotkey. Customizations are preserved
+        // across launches for versions ≥ 2.
         let storedVersion = UserDefaults.standard.integer(forKey: "settingsVersion")
-        let currentVersion = 3
+        let currentVersion = 4
 
         if storedVersion < 2 {
             self.newNoteHotkey = defaultNew
             self.historyHotkey = defaultHistory
             self.saveHotkey    = defaultSave
             self.addTabToGroupHotkey = defaultAddTab
+            self.revealAllHotkey = defaultReveal
             let enc = JSONEncoder()
             if let d = try? enc.encode(defaultNew)     { UserDefaults.standard.set(d, forKey: "newNoteHotkey") }
             if let d = try? enc.encode(defaultHistory) { UserDefaults.standard.set(d, forKey: "historyHotkey") }
             if let d = try? enc.encode(defaultSave)    { UserDefaults.standard.set(d, forKey: "saveHotkey") }
             if let d = try? enc.encode(defaultAddTab)  { UserDefaults.standard.set(d, forKey: "addTabToGroupHotkey") }
+            if let d = try? enc.encode(defaultReveal)  { UserDefaults.standard.set(d, forKey: "revealAllHotkey") }
             UserDefaults.standard.set(currentVersion, forKey: "settingsVersion")
         } else {
             self.newNoteHotkey       = Self.load(key: "newNoteHotkey",       defaultTo: defaultNew)
             self.historyHotkey       = Self.load(key: "historyHotkey",       defaultTo: defaultHistory)
             self.saveHotkey          = Self.load(key: "saveHotkey",          defaultTo: defaultSave)
             self.addTabToGroupHotkey = Self.load(key: "addTabToGroupHotkey", defaultTo: defaultAddTab)
+            self.revealAllHotkey     = Self.load(key: "revealAllHotkey",     defaultTo: defaultReveal)
             // Bump version so future migrations can run.
             if storedVersion < currentVersion {
                 UserDefaults.standard.set(currentVersion, forKey: "settingsVersion")
@@ -154,6 +167,9 @@ final class SettingsStore: ObservableObject {
         }
         if let data = try? JSONEncoder().encode(addTabToGroupHotkey) {
             defaults.set(data, forKey: "addTabToGroupHotkey")
+        }
+        if let data = try? JSONEncoder().encode(revealAllHotkey) {
+            defaults.set(data, forKey: "revealAllHotkey")
         }
     }
 

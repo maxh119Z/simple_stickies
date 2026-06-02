@@ -195,6 +195,9 @@
 			);
 			mainGroup = 4216CFA02FBC1CB700261381;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				42A144EE2FCE7A3C001B6AC8 /* XCRemoteSwiftPackageReference "SwiftMath" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 4216CFAA2FBC1CB700261381 /* Products */;
 			projectDirPath = "";
@@ -591,6 +594,17 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		42A144EE2FCE7A3C001B6AC8 /* XCRemoteSwiftPackageReference "SwiftMath" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mgriebling/SwiftMath";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.7.3;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 	};
 	rootObject = 4216CFA12FBC1CB700261381 /* Project object */;
 }

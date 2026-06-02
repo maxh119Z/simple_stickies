@@ -38,9 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         registerHotkeys()
 
-        // Auto-open any pinned notes so the pin behavior is live immediately.
+        // Auto-open pinned notes that the user hasn't dismissed. The X button
+        // sets `dismissed = true` so closed notes stay closed across launches.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            for note in NoteStore.shared.notes where note.pinnedToApp != nil {
+            for note in NoteStore.shared.notes where note.pinnedToApp != nil && !note.dismissed {
                 self?.showNote(note)
             }
         }
@@ -66,7 +67,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Rebuild the menu so shortcut labels reflect the current settings.
     private func rebuildMenu() {
-        NSLog("StickyNotes: ⚙︎ rebuildMenu called")
         let menu = NSMenu()
         let s = SettingsStore.shared
 
@@ -77,6 +77,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(.separator())
         addItem(to: menu, title: "Add Chrome Tab to Active Group  \(s.addTabToGroupHotkey.displayString)",
                 selector: #selector(toggleTabInActiveGroup))
+        addItem(to: menu, title: "\(PinManager.shared.revealAll ? "Hide Peeked Notes" : "Peek at All Notes")  \(s.revealAllHotkey.displayString)",
+                selector: #selector(toggleRevealAllNotes))
         addItem(to: menu, title: "Manage Tab Groups…",
                 selector: #selector(showGroupsWindow))
         menu.addItem(.separator())
@@ -85,20 +87,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         addItem(to: menu, title: "Test Chrome Pinning…",
                 selector: #selector(testChromePinning))
         menu.addItem(.separator())
-        // DEBUG: a test item that does nothing but NSLog. If THIS one fires but
-        // "Manage Tab Groups…" doesn't, the selector for showGroupsWindow is
-        // wired wrong. If neither fires, all menu actions are broken (very
-        // unlikely — would mean nothing else in this menu works either).
-        addItem(to: menu, title: "🐛 DEBUG: Test Menu Action",
-                selector: #selector(debugTestMenuAction))
-        menu.addItem(.separator())
         menu.addItem(NSMenuItem(
             title: "Quit Sticky Notes",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         ))
         statusItem.menu = menu
-        NSLog("StickyNotes: ⚙︎ rebuildMenu finished — \(menu.items.count) items in menu")
     }
 
     /// Explicit step-by-step menu-item construction with per-item logging so we
@@ -110,8 +104,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         item.target = self
         item.action = selector
         item.keyEquivalent = key
-        let responds = self.responds(to: selector)
-        NSLog("StickyNotes:   + '\(title)' → \(selector) [target responds: \(responds)]")
         menu.addItem(item)
     }
 
@@ -121,14 +113,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
         return item
-    }
-
-    @objc func debugTestMenuAction() {
-        NSLog("StickyNotes: ★★★ debugTestMenuAction FIRED — menu actions work ★★★")
-        let alert = NSAlert()
-        alert.messageText = "Debug menu action fired ✓"
-        alert.informativeText = "Menu item wiring is working. If Manage Tab Groups still doesn't fire, the selector for showGroupsWindow is the problem."
-        alert.runModal()
     }
 
     // MARK: - Hotkeys
@@ -156,6 +140,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             modifiers: s.addTabToGroupHotkey.modifiers
         ) { [weak self] in
             self?.toggleTabInActiveGroup()
+        }
+
+        HotkeyManager.shared.register(
+            keyCode: s.revealAllHotkey.keyCode,
+            modifiers: s.revealAllHotkey.modifiers
+        ) { [weak self] in
+            self?.toggleRevealAllNotes()
         }
 
         rebuildMenu()
@@ -239,15 +230,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func showGroupsWindow() {
-        NSLog("StickyNotes: ▶︎ showGroupsWindow START")
-
         if let win = groupsWindow {
-            NSLog("StickyNotes:   reusing existing groupsWindow (visible=\(win.isVisible), frame=\(win.frame))")
             win.setIsVisible(true)
             win.makeKeyAndOrderFront(nil)
             win.orderFrontRegardless()
             NSApp.activate(ignoringOtherApps: true)
-            NSLog("StickyNotes: ◀︎ showGroupsWindow END (reused), visible=\(win.isVisible)")
             return
         }
 
@@ -277,13 +264,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.delegate = self
         groupsWindow = window
 
-        NSLog("StickyNotes:   created window, frame=\(window.frame), level=\(window.level.rawValue)")
-
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
-
-        NSLog("StickyNotes: ◀︎ showGroupsWindow END, visible=\(window.isVisible), onScreen=\(window.isOnActiveSpace)")
     }
 
     // MARK: - Tab Group hotkey action
@@ -325,6 +308,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
             self?.statusItem.button?.image = original
         }
+    }
+
+    // MARK: - Peek / reveal-all notes
+
+    /// Toggle peek mode: show every pinned note at once, press again to restore
+    /// normal tab-based visibility. Bound to ⌃⌘M by default.
+    @objc func toggleRevealAllNotes() {
+        let willReveal = !PinManager.shared.revealAll
+
+        if willReveal {
+            // Reopen any pinned notes whose windows were closed earlier so they
+            // can actually be revealed (otherwise they'd be invisible "forever").
+            // Notes the user explicitly dismissed (X) stay dismissed — peek
+            // surfaces forgotten notes, it doesn't resurrect deliberate closures.
+            for note in NoteStore.shared.notes where note.pinnedToApp != nil && !note.dismissed {
+                if noteWindows[note.id] == nil {
+                    showNote(note)
+                }
+            }
+        }
+
+        let nowRevealing = PinManager.shared.toggleRevealAll()
+        // Persistent-ish icon swap so you can tell peek mode is on.
+        if let button = statusItem.button {
+            button.image = NSImage(
+                systemSymbolName: nowRevealing ? "eye.fill" : "note.text",
+                accessibilityDescription: nowRevealing ? "Peeking at all notes" : "Sticky Notes"
+            )
+        }
+        rebuildMenu()  // refresh the menu item title (Peek ↔ Hide)
     }
 
     // MARK: - Note windows
@@ -392,12 +405,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // until the stack overflows.
         guard let window = noteWindows[id] else { return }
 
-        if save, var note = NoteStore.shared.note(for: id) {
-            let f = window.frame
-            note.frameX = f.origin.x
-            note.frameY = f.origin.y
-            note.frameW = f.size.width
-            note.frameH = f.size.height
+        // Persist `dismissed = true` (plus the latest frame if requested)
+        // BEFORE tearing down the window. This is what keeps the note from
+        // resurrecting on the next peek toggle or the next app launch.
+        if var note = NoteStore.shared.note(for: id) {
+            if save {
+                let f = window.frame
+                note.frameX = f.origin.x
+                note.frameY = f.origin.y
+                note.frameW = f.size.width
+                note.frameH = f.size.height
+            }
+            note.dismissed = true
             NoteStore.shared.update(note)
         }
 
@@ -424,7 +443,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let view = HistoryView(
             onSelect: { [weak self] note in
-                self?.showNote(note)
+                // Opening from history means "I want to see this again" — clear
+                // the dismissed flag so launch + peek will include it once more.
+                if var fresh = NoteStore.shared.note(for: note.id), fresh.dismissed {
+                    fresh.dismissed = false
+                    NoteStore.shared.update(fresh)
+                    self?.showNote(fresh)
+                } else {
+                    self?.showNote(note)
+                }
                 self?.historyWindow?.close()
                 self?.historyWindow = nil
             },

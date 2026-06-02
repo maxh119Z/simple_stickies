@@ -46,7 +46,12 @@ struct NoteView: View {
                 data: data,
                 options: [.documentType: NSAttributedString.DocumentType.rtfd],
                 documentAttributes: nil) {
-            attr = decoded
+            // Re-instate MathAttachment subclasses for any math blocks saved
+            // in a previous session. Plain attachments (pasted images) are
+            // left alone.
+            let mutable = NSMutableAttributedString(attributedString: decoded)
+            MathAttachment.upgradeAttachments(in: mutable)
+            attr = mutable
         } else {
             let m = NSMutableAttributedString(string: note.content)
             m.addAttributes([
@@ -303,19 +308,7 @@ struct NoteView: View {
 
         Divider()
         Button("Manage groups…") {
-            NSLog("StickyNotes: ⊕ note context-menu 'Manage groups…' tapped")
-            // Prefer the static shared (set in applicationDidFinishLaunching).
-            // Fall back to NSApp.delegate cast in case the shared wasn't set
-            // for some reason.
-            if let d = AppDelegate.shared {
-                NSLog("StickyNotes:   using AppDelegate.shared")
-                d.showGroupsWindow()
-            } else if let d = NSApp.delegate as? AppDelegate {
-                NSLog("StickyNotes:   using NSApp.delegate fallback")
-                d.showGroupsWindow()
-            } else {
-                NSLog("StickyNotes:   ✗ no AppDelegate available (this should be impossible)")
-            }
+            (AppDelegate.shared ?? (NSApp.delegate as? AppDelegate))?.showGroupsWindow()
         }
 
         if note.pinnedToApp != nil {
